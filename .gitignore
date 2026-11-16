@@ -26,3 +26,7 @@ canva_session.json
 
 gopay/data/*
 !gopay/data/.gitkeep
+*serviceAccountKey*.json
+*firebase-adminsdk*.json
+gopay/tokens.json
+tokens.json
