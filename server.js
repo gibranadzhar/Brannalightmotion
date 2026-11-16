@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import firebaseManager from './firebase.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,12 +55,57 @@ function writeJSON(filePath, data) {
   } catch (e) {
     console.error('[STORAGE] Error writing JSON:', e.message);
   }
+
+  // Otomatis sinkronkan ke Firebase Cloud Firestore secara instan
+  if (firebaseManager && firebaseManager.isReady()) {
+    if (filePath === USERS_FILE) {
+      firebaseManager.saveUsers(data).catch(e => console.warn('[FIREBASE SYNC] Users save error:', e.message));
+    } else if (filePath === CONFIG_FILE) {
+      firebaseManager.saveConfig(data).catch(e => console.warn('[FIREBASE SYNC] Config save error:', e.message));
+    } else if (filePath === LOGS_FILE) {
+      firebaseManager.saveLogs(data).catch(e => console.warn('[FIREBASE SYNC] Logs save error:', e.message));
+    }
+  }
 }
 
 // Memory Database Store
 let config = readJSON(CONFIG_FILE, DEFAULT_CONFIG);
 let users = readJSON(USERS_FILE, []);
 let logs = readJSON(LOGS_FILE, []);
+
+// Pulihkan database otomatis dari Cloud Firestore saat booting / reboot
+async function syncDatabaseFromCloud() {
+  if (firebaseManager && firebaseManager.isReady()) {
+    console.log('🔄 [Firebase] Menghubungkan dan memulihkan database dari Cloud Firestore...');
+    try {
+      const cloudUsers = await firebaseManager.loadUsers();
+      if (cloudUsers && Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+        users = cloudUsers;
+        try { fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2)); } catch (e) {}
+      } else if (users.length > 0) {
+        await firebaseManager.saveUsers(users);
+      }
+
+      const cloudConfig = await firebaseManager.loadConfig();
+      if (cloudConfig && typeof cloudConfig === 'object') {
+        config = { ...config, ...cloudConfig };
+        try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); } catch (e) {}
+      } else {
+        await firebaseManager.saveConfig(config);
+      }
+
+      const cloudLogs = await firebaseManager.loadLogs();
+      if (cloudLogs && Array.isArray(cloudLogs) && cloudLogs.length > 0) {
+        logs = cloudLogs;
+        try { fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2)); } catch (e) {}
+      }
+      console.log(`✅ [Firebase] Database siap! ${users.length} pengguna aktif dipulihkan tanpa takut reset.`);
+    } catch (err) {
+      console.warn('⚠️ [Firebase] Gagal sinkronisasi awal:', err.message);
+    }
+  }
+}
+syncDatabaseFromCloud();
 
 // Safe Auto Sync Database ke GitHub
 let syncTimeout = null;
