@@ -23,3 +23,6 @@ data/*
 # Local merchant / session secrets
 gopay/token.txt
 canva_session.json
+
+gopay/data/*
+!gopay/data/.gitkeep
