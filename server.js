@@ -139,7 +139,7 @@ app.post('/api/auth/register', (req, res) => {
   return res.json({
     success: true,
     message: 'Pendaftaran berhasil! Silakan login.',
-    user: { username: newUser.username, email: newUser.email, role: newUser.role, credits: newUser.credits }
+    user: { username: newUser.username, email: newUser.email, role: newUser.role, credits: newUser.credits, apiKey: hasApiRole(newUser.role) ? (newUser.apiKey || '') : '' }
   });
 });
 
@@ -170,8 +170,37 @@ app.post('/api/auth/login', (req, res) => {
   return res.json({
     success: true,
     message: 'Login berhasil!',
-    user: { username: user.username, email: user.email, role: user.role, credits: user.credits }
+    user: { username: user.username, email: user.email, role: user.role, credits: user.credits, apiKey: hasApiRole(user.role) ? (user.apiKey || '') : '' }
   });
+});
+
+const API_ROLES = ['reseller', 'premium', 'autogen', 'vip', 'owner', 'pro'];
+function hasApiRole(role) {
+  return API_ROLES.includes(role);
+}
+
+app.post('/api/auth/reset-key', (req, res) => {
+  const { username } = req.body;
+  if (!username) {
+    return res.status(401).json({ success: false, message: 'Tidak terautentikasi.' });
+  }
+  const cleanUser = String(username).trim().toLowerCase();
+  const user = users.find(u => u.username === cleanUser);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
+  }
+  if (!hasApiRole(user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Akses Ditolak! API Key hanya untuk pengguna yang memiliki Role resmi (Reseller, Premium, VIP, Owner).'
+    });
+  }
+  const newKey = 'BRANN-' + Math.random().toString(36).substring(2, 10).toUpperCase() + '-' + Date.now().toString(36).toUpperCase();
+  user.apiKey = newKey;
+  user.apiActive = true;
+  writeJSON(USERS_FILE, users);
+  addLog(cleanUser, 'RESET_API_KEY', 'SUCCESS', 'API Key baru dibuat');
+  return res.json({ success: true, apiKey: newKey, message: 'API Key berhasil di-generate!' });
 });
 
 /* ==========================================================================

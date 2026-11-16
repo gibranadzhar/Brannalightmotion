@@ -181,7 +181,7 @@
         return ['reseller', 'premium', 'vip', 'owner'].indexOf(role) !== -1;
     }
     function hasApiRole(role) {
-        return ['premium', 'vip', 'owner', 'pro'].indexOf(role) !== -1;
+        return ['reseller', 'premium', 'autogen', 'vip', 'owner', 'pro'].indexOf(role) !== -1;
     }
     function hasBulkRole(role) {
         return ['vip', 'owner'].indexOf(role) !== -1;
@@ -1568,7 +1568,7 @@
         /* ============================== API GUIDE ============================== */
 
     function loadAPIGuide() {
-        var key = currentUser ? (currentUser.apiKey || 'API_KEY_ANDA') : 'API_KEY_ANDA';
+        var key = (currentUser && hasApiRole(currentUser.role)) ? (currentUser.apiKey || 'API_KEY_ANDA') : 'API_KEY_ANDA';
         var origin = window.location.origin;
         var docs = $('screen-apiguide');
         if (!docs) return;
@@ -1705,7 +1705,7 @@
         if ($('pinfo-name')) $('pinfo-name').textContent = u.username;
         if ($('pinfo-role')) $('pinfo-role').textContent = PROFILE_ROLE[u.role] || 'Anggota';
         if ($('pinfo-credits')) $('pinfo-credits').textContent = creditsDisplay() + ' Credits';
-        if ($('pinfo-apikey')) $('pinfo-apikey').textContent = u.apiKey || '-';
+        if ($('pinfo-apikey')) $('pinfo-apikey').textContent = hasApiRole(u.role) ? (u.apiKey || '-') : '- (Khusus Role Berbayar)';
         if ($('pinfo-expired')) {
             if (u.apiPlan === 'lifetime') {
                 $('pinfo-expired').textContent = 'Lifetime';
@@ -1763,32 +1763,41 @@
 
         $('api-key-input').value = u.apiKey || 'Belum ada API Key. Silahkan beli di menu Beli API Key.';
 
+        var isApiEligible = hasApiRole(u.role);
         var apiSection = $('profile-apikey-section');
-        // Role premium/autogen/vip/owner selalu boleh. 'user' boleh bila toggle
-        // "Nonaktifkan Apikey Untuk User" dalam posisi OFF (APP_MAINT.apikeyUserDisabled false).
-        var canManageApiKey = hasApiRole(u.role) || (u.role === 'user' && APP_MAINT && !APP_MAINT.apikeyUserDisabled);
+        // Hanya role berbayar / privileged (reseller, premium, autogen, vip, owner, pro) yang boleh akses & kelola API key.
+        // Role 'user' (gratis/biasa) TIDAK boleh mendapatkan atau mengelola API Key.
+        var canManageApiKey = isApiEligible;
         if (apiSection) apiSection.classList.toggle('hidden', !canManageApiKey);
 
         var apiKeyInput = $('api-key-input');
         var copyBtn = $('btn-copy-api');
         var resetBtn = $('btn-reset-api');
         var statusEl = $('profile-api-status');
-        var hasApiKey = !!u.apiKey;
+        var hasApiKey = !!u.apiKey && isApiEligible;
         var apiIsActive = hasApiKey && u.apiActive !== false;
 
         if (apiKeyInput) {
-            apiKeyInput.value = u.apiKey || 'Belum ada API Key. Silahkan beli di menu Beli API Key.';
+            apiKeyInput.value = isApiEligible
+                ? (u.apiKey || 'Belum ada API Key. Silahkan klik tombol buat key.')
+                : 'Terkunci. Akses API Key hanya untuk pengguna yang memiliki Role (Reseller/Premium/VIP/Owner).';
             apiKeyInput.classList.toggle('is-empty', !hasApiKey);
         }
         if (statusEl) {
             statusEl.classList.toggle('is-inactive', !apiIsActive);
-            statusEl.innerHTML = apiIsActive
-                ? '<i class="fa-solid fa-circle-check"></i> Aktif'
-                : '<i class="fa-solid fa-circle-exclamation"></i> Belum tersedia';
+            statusEl.innerHTML = !isApiEligible
+                ? '<i class="fa-solid fa-lock"></i> Terkunci (Role Only)'
+                : (apiIsActive
+                    ? '<i class="fa-solid fa-circle-check"></i> Aktif'
+                    : '<i class="fa-solid fa-circle-exclamation"></i> Belum tersedia');
         }
         if (copyBtn) {
             copyBtn.disabled = !hasApiKey;
             copyBtn.setAttribute('aria-disabled', hasApiKey ? 'false' : 'true');
+        }
+        if (resetBtn) {
+            resetBtn.disabled = !isApiEligible;
+            resetBtn.setAttribute('aria-disabled', isApiEligible ? 'false' : 'true');
         }
 
         // ==================== CUSTOM ORDER ID PREFIX (VIP & OWNER ONLY) ====================
@@ -1886,6 +1895,9 @@
         if (copyBtn && !copyBtn.dataset.bound) {
             copyBtn.dataset.bound = '1';
             copyBtn.addEventListener('click', function () {
+                if (!currentUser || !hasApiRole(currentUser.role)) {
+                    return Swal.fire({ icon: 'warning', title: 'Akses Dibatasi', text: 'Fitur API Key hanya dapat digunakan oleh akun yang memiliki Role.' });
+                }
                 var value = apiKeyInput ? apiKeyInput.value : '';
                 if (!value || value.indexOf('Belum ada') === 0) {
                     return Swal.fire({ icon: 'info', title: 'API Key belum tersedia', text: 'Upgrade paket terlebih dahulu untuk mendapatkan API Key.' });
@@ -1904,6 +1916,13 @@
         if (resetBtn && !resetBtn.dataset.bound) {
             resetBtn.dataset.bound = '1';
             resetBtn.addEventListener('click', function () {
+                if (!currentUser || !hasApiRole(currentUser.role)) {
+                    return Swal.fire({
+                        icon: 'error',
+                        title: 'Akses Ditolak',
+                        text: 'Role Anda saat ini tidak memiliki izin untuk mendapatkan API Key. Silakan upgrade ke role Reseller, Premium, VIP, atau Owner.'
+                    });
+                }
                 Swal.fire({
                     title: 'Reset API Key?',
                     text: 'API Key lama Anda tidak akan bisa digunakan lagi setelah di-reset!',
