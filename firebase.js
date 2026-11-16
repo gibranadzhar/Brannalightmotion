@@ -1,3 +1,4 @@
+import { getEmbeddedServiceAccount, getEmbeddedDatabaseUrl } from './firebase-credentials.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -30,7 +31,16 @@ class FirebaseManager {
     }
 
     let serviceAccount = null;
-    let databaseURL = process.env.FIREBASE_DATABASE_URL || 'https://database-alight-motion-default-rtdb.firebaseio.com/';
+    let databaseURL = process.env.FIREBASE_DATABASE_URL || getEmbeddedDatabaseUrl() || 'https://database-alight-motion-default-rtdb.firebaseio.com/';
+
+    // 0. Auto-load from embedded credentials file (Zero Config!)
+    try {
+      const embedded = getEmbeddedServiceAccount();
+      if (embedded && embedded.project_id) {
+        serviceAccount = embedded;
+        console.log('🔥 [Firebase] Terhubung otomatis via file kredensial lokal (Zero Config Railway)!');
+      }
+    } catch (e) {}
 
     if (customConfig && customConfig.serviceAccount) {
       serviceAccount = customConfig.serviceAccount;
