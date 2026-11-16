@@ -30,7 +30,7 @@ class FirebaseManager {
     }
 
     let serviceAccount = null;
-    let databaseURL = process.env.FIREBASE_DATABASE_URL || null;
+    let databaseURL = process.env.FIREBASE_DATABASE_URL || 'https://database-alight-motion-default-rtdb.firebaseio.com/';
 
     if (customConfig && customConfig.serviceAccount) {
       serviceAccount = customConfig.serviceAccount;
@@ -41,6 +41,7 @@ class FirebaseManager {
     if (!serviceAccount) {
       const candidateFiles = [
         path.join(__dirname, 'serviceAccountKey.json'),
+        path.join(__dirname, 'gopay', 'serviceAccountKey.json'),
         path.join(__dirname, 'firebase-service-account.json'),
         path.join(__dirname, 'firebase-key.json'),
         path.join(__dirname, 'data', 'serviceAccountKey.json'),
@@ -95,11 +96,12 @@ class FirebaseManager {
     }
 
     try {
-      this.projectId = serviceAccount.project_id || 'unknown';
+      this.projectId = serviceAccount.project_id || 'database-alight-motion';
       this.databaseURL = databaseURL || (this.projectId ? `https://${this.projectId}-default-rtdb.firebaseio.com/` : null);
 
+      const cred = admin.cert ? admin.cert(serviceAccount) : admin.credential.cert(serviceAccount);
       const appConfig = {
-        credential: admin.credential.cert(serviceAccount)
+        credential: cred
       };
       if (this.databaseURL) {
         appConfig.databaseURL = this.databaseURL;
@@ -108,21 +110,20 @@ class FirebaseManager {
       this.app = admin.initializeApp(appConfig);
 
       try {
-        this.firestore = getFirestore(this.app);
-      } catch (e) {
-        console.warn('⚠️ [Firebase] Firestore initialization warning:', e.message);
-      }
-
-      try {
         if (this.databaseURL) {
           this.rtdb = getDatabase(this.app);
         }
-      } catch (e) {
-        // Realtime DB optional
-      }
+      } catch (e) {}
+
+      try {
+        this.firestore = getFirestore(this.app);
+      } catch (e) {}
 
       this.isInitialized = true;
-      console.log(`✅ [Firebase] Berhasil terhubung ke Cloud Firestore! Project: ${this.projectId}`);
+      console.log(`✅ [Firebase] Berhasil terhubung ke Firebase! Project: ${this.projectId}`);
+      if (this.databaseURL) {
+        console.log(`📡 [Firebase] Realtime Database URL: ${this.databaseURL}`);
+      }
     } catch (err) {
       console.error('❌ [Firebase] Inisialisasi Firebase gagal:', err.message);
       this.isInitialized = false;
@@ -130,7 +131,7 @@ class FirebaseManager {
   }
 
   isReady() {
-    return this.isInitialized && (this.firestore !== null || this.rtdb !== null);
+    return this.isInitialized && (this.rtdb !== null || this.firestore !== null);
   }
 
   /* ==========================================================================
@@ -139,6 +140,18 @@ class FirebaseManager {
   async saveUsers(users) {
     if (!this.isReady()) return false;
     let saved = false;
+
+    if (this.rtdb) {
+      try {
+        await this.rtdb.ref('app_data/users').set({
+          list: users,
+          updatedAt: Date.now()
+        });
+        saved = true;
+      } catch (e) {
+        console.warn('⚠️ [Firebase] Gagal menyimpan users ke Realtime Database:', e.message);
+      }
+    }
 
     if (this.firestore) {
       try {
@@ -149,18 +162,6 @@ class FirebaseManager {
           updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
         saved = true;
-      } catch (e) {
-        console.warn('⚠️ [Firebase] Gagal menyimpan users ke Firestore:', e.message);
-      }
-    }
-
-    if (this.rtdb) {
-      try {
-        await this.rtdb.ref('app_data/users').set({
-          list: users,
-          updatedAt: Date.now()
-        });
-        saved = true;
       } catch (e) {}
     }
 
@@ -170,29 +171,27 @@ class FirebaseManager {
   async loadUsers() {
     if (!this.isReady()) return null;
 
+    if (this.rtdb) {
+      try {
+        const snap = await this.rtdb.ref('app_data/users').once('value');
+        if (snap.exists()) {
+          const data = snap.val();
+          if (data && Array.isArray(data.list)) {
+            console.log(`☁️ [Firebase] Berhasil memulihkan ${data.list.length} pengguna dari Firebase Database!`);
+            return data.list;
+          }
+        }
+      } catch (e) {}
+    }
+
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('app_data').doc('users');
         const snap = await docRef.get();
         if (snap.exists) {
           const data = snap.data();
-          if (Array.isArray(data.list)) {
+          if (data && Array.isArray(data.list)) {
             console.log(`☁️ [Firebase] Berhasil memulihkan ${data.list.length} pengguna dari Cloud Firestore!`);
-            return data.list;
-          }
-        }
-      } catch (e) {
-        console.warn('⚠️ [Firebase] Gagal memuat users dari Firestore:', e.message);
-      }
-    }
-
-    if (this.rtdb) {
-      try {
-        const snap = await this.rtdb.ref('app_data/users').once('value');
-        if (snap.exists()) {
-          const data = snap.val();
-          if (Array.isArray(data.list)) {
-            console.log(`☁️ [Firebase] Berhasil memulihkan ${data.list.length} pengguna dari Realtime Database!`);
             return data.list;
           }
         }
@@ -209,19 +208,6 @@ class FirebaseManager {
     if (!this.isReady()) return false;
     let saved = false;
 
-    if (this.firestore) {
-      try {
-        const docRef = this.firestore.collection('app_data').doc('config');
-        await docRef.set({
-          ...config,
-          updatedAt: FieldValue.serverTimestamp()
-        }, { merge: true });
-        saved = true;
-      } catch (e) {
-        console.warn('⚠️ [Firebase] Gagal menyimpan config ke Firestore:', e.message);
-      }
-    }
-
     if (this.rtdb) {
       try {
         await this.rtdb.ref('app_data/config').set({
@@ -232,11 +218,33 @@ class FirebaseManager {
       } catch (e) {}
     }
 
+    if (this.firestore) {
+      try {
+        const docRef = this.firestore.collection('app_data').doc('config');
+        await docRef.set({
+          ...config,
+          updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+        saved = true;
+      } catch (e) {}
+    }
+
     return saved;
   }
 
   async loadConfig() {
     if (!this.isReady()) return null;
+
+    if (this.rtdb) {
+      try {
+        const snap = await this.rtdb.ref('app_data/config').once('value');
+        if (snap.exists()) {
+          const val = snap.val();
+          console.log('☁️ [Firebase] Konfigurasi server berhasil dipulihkan dari Firebase Database!');
+          return val;
+        }
+      } catch (e) {}
+    }
 
     if (this.firestore) {
       try {
@@ -245,18 +253,6 @@ class FirebaseManager {
         if (snap.exists) {
           console.log('☁️ [Firebase] Konfigurasi server berhasil dipulihkan dari Cloud Firestore!');
           return snap.data();
-        }
-      } catch (e) {
-        console.warn('⚠️ [Firebase] Gagal memuat config dari Firestore:', e.message);
-      }
-    }
-
-    if (this.rtdb) {
-      try {
-        const snap = await this.rtdb.ref('app_data/config').once('value');
-        if (snap.exists()) {
-          console.log('☁️ [Firebase] Konfigurasi server berhasil dipulihkan dari Realtime Database!');
-          return snap.val();
         }
       } catch (e) {}
     }
@@ -269,6 +265,15 @@ class FirebaseManager {
      ========================================================================== */
   async saveLogs(logs) {
     if (!this.isReady()) return false;
+    if (this.rtdb) {
+      try {
+        await this.rtdb.ref('app_data/logs').set({
+          list: Array.isArray(logs) ? logs.slice(0, 150) : [],
+          updatedAt: Date.now()
+        });
+        return true;
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('app_data').doc('logs');
@@ -284,14 +289,25 @@ class FirebaseManager {
 
   async loadLogs() {
     if (!this.isReady()) return null;
+    if (this.rtdb) {
+      try {
+        const snap = await this.rtdb.ref('app_data/logs').once('value');
+        if (snap.exists()) {
+          const data = snap.val();
+          if (data && Array.isArray(data.list)) {
+            console.log(`☁️ [Firebase] Memulihkan ${data.list.length} log riwayat dari Firebase Database!`);
+            return data.list;
+          }
+        }
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('app_data').doc('logs');
         const snap = await docRef.get();
         if (snap.exists) {
           const data = snap.data();
-          if (Array.isArray(data.list)) {
-            console.log(`☁️ [Firebase] Memulihkan ${data.list.length} log riwayat dari Cloud Firestore!`);
+          if (data && Array.isArray(data.list)) {
             return data.list;
           }
         }
@@ -305,6 +321,15 @@ class FirebaseManager {
      ========================================================================== */
   async saveTokens(tokens) {
     if (!this.isReady()) return false;
+    if (this.rtdb) {
+      try {
+        await this.rtdb.ref('gopay_config/tokens').set({
+          ...tokens,
+          updatedAt: Date.now()
+        });
+        return true;
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('gopay_config').doc('tokens');
@@ -320,6 +345,14 @@ class FirebaseManager {
 
   async loadTokens() {
     if (!this.isReady()) return null;
+    if (this.rtdb) {
+      try {
+        const snap = await this.rtdb.ref('gopay_config/tokens').once('value');
+        if (snap.exists()) {
+          return snap.val();
+        }
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('gopay_config').doc('tokens');
@@ -334,6 +367,15 @@ class FirebaseManager {
 
   async saveApiKeys(keys) {
     if (!this.isReady()) return false;
+    if (this.rtdb) {
+      try {
+        await this.rtdb.ref('gopay_config/apikeys').set({
+          keys,
+          updatedAt: Date.now()
+        });
+        return true;
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('gopay_config').doc('apikeys');
@@ -349,13 +391,24 @@ class FirebaseManager {
 
   async loadApiKeys() {
     if (!this.isReady()) return null;
+    if (this.rtdb) {
+      try {
+        const snap = await this.rtdb.ref('gopay_config/apikeys').once('value');
+        if (snap.exists()) {
+          const data = snap.val();
+          if (data && Array.isArray(data.keys)) {
+            return data.keys;
+          }
+        }
+      } catch (e) {}
+    }
     if (this.firestore) {
       try {
         const docRef = this.firestore.collection('gopay_config').doc('apikeys');
         const snap = await docRef.get();
         if (snap.exists) {
           const data = snap.data();
-          if (Array.isArray(data.keys)) {
+          if (data && Array.isArray(data.keys)) {
             return data.keys;
           }
         }
